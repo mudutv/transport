@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"sync"
+	"context"
 )
 
 // ErrFull is returned when the buffer has hit the configured limits.
@@ -133,6 +134,56 @@ func (b *Buffer) Read(packet []byte) (n int, err error) {
 
 		// Wake for the broadcast.
 		<-notify
+	}
+}
+
+func (b *Buffer) ReadContext(packet []byte,ctx context.Context) (n int, err error) {
+	for {
+		b.mutex.Lock()
+
+		// See if there are any packets in the queue.
+		if len(b.packets) > 0 {
+			first := b.packets[0]
+
+			// This is a packet-based reader/writer so we can't truncate.
+			if len(first) > len(packet) {
+				b.mutex.Unlock()
+				return 0, io.ErrShortBuffer
+			}
+
+			// Remove our packet and continue.
+			b.packets = b.packets[1:]
+			b.size -= len(first)
+
+			b.mutex.Unlock()
+
+			// Actually transfer the data.
+			n := copy(packet, first)
+			return n, nil
+		}
+
+		// Make sure the reader isn't actually closed.
+		// This is done after checking packets to fully read the buffer.
+		if b.closed {
+			b.mutex.Unlock()
+			return 0, io.EOF
+		}
+
+		// Get the current notify channel.
+		// This will be closed when there is new data available, waking us up.
+		notify := b.notify
+
+		// Set the subs marker, telling the writer we're waiting.
+		b.subs = true
+		b.mutex.Unlock()
+
+		// Wake for the broadcast.
+		select {
+		case <-ctx.Done():
+			return 0, io.EOF
+		case <-notify:
+		}
+
 	}
 }
 
