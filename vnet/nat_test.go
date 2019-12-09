@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pion/logging"
+	"github.com/mudutv/logging"
 	"github.com/stretchr/testify/assert"
 )
 
