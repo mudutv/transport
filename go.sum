@@ -2,6 +2,8 @@ github.com/davecgh/go-spew v1.1.0 h1:ZDRjVQ15GmhC3fiQ8ni8+OwkZQO4DARzQgrnXU1Liz8
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/mudutv/logging v0.2.3-0.20191209095452-db0bfd391975 h1:wkijbH6Kaj086VnwaGPH+bWJSdDs71w1c4ZQQ+CF/UM=
 github.com/mudutv/logging v0.2.3-0.20191209095452-db0bfd391975/go.mod h1:5ohYtPQLTcF6yqfMYJNwBWulaVWxKbS2CUztPAb9VIQ=
+github.com/mudutv/logging v0.2.3-0.20191210040841-267e46158a81 h1:E/M4rVq+0RRuYFNgC85VTpsp/OKtshbpu7fc98imrEY=
+github.com/mudutv/logging v0.2.3-0.20191210040841-267e46158a81/go.mod h1:2fTu5focjhpojBBMEmzl+5P2Wp3Y0h76OMArVm+o+8c=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=
