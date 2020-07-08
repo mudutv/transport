@@ -3,6 +3,7 @@ module github.com/mudutv/transport
 go 1.12
 
 require (
-	github.com/mudutv/logging v0.2.3-0.20191210040841-267e46158a81
-	github.com/stretchr/testify v1.4.0
+	github.com/mudutv/logging v0.2.2
+	github.com/stretchr/testify v1.6.1
+	golang.org/x/net v0.0.0-20200625001655-4c5254603344
 )

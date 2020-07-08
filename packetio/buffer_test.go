@@ -1,7 +1,9 @@
 package packetio
 
 import (
+	"fmt"
 	"io"
+	"net"
 	"testing"
 	"time"
 
@@ -24,6 +26,19 @@ func TestBuffer(t *testing.T) {
 	assert.NoError(err)
 	assert.Equal(2, n)
 	assert.Equal([]byte{0, 1}, packet[:n])
+
+	// Read deadline
+	err = buffer.SetReadDeadline(time.Unix(0, 1))
+	assert.NoError(err)
+	n, err = buffer.Read(packet)
+	if e, ok := err.(net.Error); !ok || !e.Timeout() {
+		t.Errorf("Unexpected error: %v", err)
+	}
+	assert.Equal(0, n)
+
+	// Reset deadline
+	err = buffer.SetReadDeadline(time.Time{})
+	assert.NoError(err)
 
 	// Write twice
 	n, err = buffer.Write([]byte{2, 3, 4})
@@ -66,6 +81,68 @@ func TestBuffer(t *testing.T) {
 	// Until EOF
 	_, err = buffer.Read(packet)
 	assert.Equal(io.EOF, err)
+}
+
+func testWraparound(t *testing.T, grow bool) {
+	assert := assert.New(t)
+
+	buffer := NewBuffer()
+	err := buffer.grow()
+	assert.NoError(err)
+
+	buffer.head = len(buffer.data) - 13
+	buffer.tail = buffer.head
+
+	p1 := []byte{1, 2, 3}
+	p2 := []byte{4, 5, 6}
+	p3 := []byte{7, 8, 9}
+	p4 := []byte{10, 11, 12}
+
+	_, err = buffer.Write(p1)
+	assert.NoError(err)
+	_, err = buffer.Write(p2)
+	assert.NoError(err)
+	_, err = buffer.Write(p3)
+	assert.NoError(err)
+
+	p := make([]byte, 10)
+
+	n, err := buffer.Read(p)
+	assert.NoError(err)
+	assert.Equal(p1, p[:n])
+
+	if grow {
+		err = buffer.grow()
+		assert.NoError(err)
+	}
+
+	n, err = buffer.Read(p)
+	assert.NoError(err)
+	assert.Equal(p2, p[:n])
+
+	_, err = buffer.Write(p4)
+	assert.NoError(err)
+
+	n, err = buffer.Read(p)
+	assert.NoError(err)
+	assert.Equal(p3, p[:n])
+	n, err = buffer.Read(p)
+	assert.NoError(err)
+	assert.Equal(p4, p[:n])
+
+	if !grow {
+		assert.Equal(len(buffer.data), minSize)
+	} else {
+		assert.Equal(len(buffer.data), 2*minSize)
+	}
+}
+
+func TestBufferWraparound(t *testing.T) {
+	testWraparound(t, false)
+}
+
+func TestBufferWraparoundGrow(t *testing.T) {
+	testWraparound(t, true)
 }
 
 func TestBufferAsync(t *testing.T) {
@@ -172,7 +249,7 @@ func TestBufferLimitSize(t *testing.T) {
 	assert := assert.New(t)
 
 	buffer := NewBuffer()
-	buffer.SetLimitSize(5)
+	buffer.SetLimitSize(11)
 
 	assert.Equal(0, buffer.Size())
 
@@ -180,23 +257,23 @@ func TestBufferLimitSize(t *testing.T) {
 	n, err := buffer.Write([]byte{0, 1})
 	assert.NoError(err)
 	assert.Equal(2, n)
-	assert.Equal(2, buffer.Size())
+	assert.Equal(4, buffer.Size())
 
 	n, err = buffer.Write([]byte{2, 3})
 	assert.NoError(err)
 	assert.Equal(2, n)
-	assert.Equal(4, buffer.Size())
+	assert.Equal(8, buffer.Size())
 
 	// Over capacity
 	_, err = buffer.Write([]byte{4, 5})
 	assert.Equal(ErrFull, err)
-	assert.Equal(4, buffer.Size())
+	assert.Equal(8, buffer.Size())
 
 	// Cheeky write at exact size.
 	n, err = buffer.Write([]byte{6})
 	assert.NoError(err)
 	assert.Equal(1, n)
-	assert.Equal(5, buffer.Size())
+	assert.Equal(11, buffer.Size())
 
 	// Read once
 	packet := make([]byte, 4)
@@ -204,31 +281,31 @@ func TestBufferLimitSize(t *testing.T) {
 	assert.NoError(err)
 	assert.Equal(2, n)
 	assert.Equal([]byte{0, 1}, packet[:n])
-	assert.Equal(3, buffer.Size())
+	assert.Equal(7, buffer.Size())
 
 	// Write once
 	n, err = buffer.Write([]byte{7, 8})
 	assert.NoError(err)
 	assert.Equal(2, n)
-	assert.Equal(5, buffer.Size())
+	assert.Equal(11, buffer.Size())
 
 	// Over capacity
 	_, err = buffer.Write([]byte{9, 10})
 	assert.Equal(ErrFull, err)
-	assert.Equal(5, buffer.Size())
+	assert.Equal(11, buffer.Size())
 
 	// Read everything
 	n, err = buffer.Read(packet)
 	assert.NoError(err)
 	assert.Equal(2, n)
 	assert.Equal([]byte{2, 3}, packet[:n])
-	assert.Equal(3, buffer.Size())
+	assert.Equal(7, buffer.Size())
 
 	n, err = buffer.Read(packet)
 	assert.NoError(err)
 	assert.Equal(1, n)
 	assert.Equal([]byte{6}, packet[:n])
-	assert.Equal(2, buffer.Size())
+	assert.Equal(4, buffer.Size())
 
 	n, err = buffer.Read(packet)
 	assert.NoError(err)
@@ -239,6 +316,62 @@ func TestBufferLimitSize(t *testing.T) {
 	// Nothing left.
 	err = buffer.Close()
 	assert.NoError(err)
+}
+
+func TestBufferLimitSizes(t *testing.T) {
+	if sizeHardlimit {
+		t.Skip("skipping since packetioSizeHardlimit is enabled")
+	}
+	sizes := []int{
+		128 * 1024,
+		1024 * 1024,
+		8 * 1024 * 1024,
+		0, // default
+	}
+	const headerSize = 2
+	const packetSize = 0x8000
+
+	for _, size := range sizes {
+		size := size
+		name := "default"
+		if size > 0 {
+			name = fmt.Sprintf("%dkbytes", size/1024)
+		}
+
+		t.Run(name, func(t *testing.T) {
+			assert := assert.New(t)
+
+			buffer := NewBuffer()
+			if size == 0 {
+				size = maxSize
+			} else {
+				buffer.SetLimitSize(size + headerSize)
+			}
+			now := time.Now()
+			assert.NoError(buffer.SetReadDeadline(now.Add(5 * time.Second))) // Set deadline to avoid test deadlock
+
+			nPackets := size / (packetSize + headerSize)
+
+			for i := 0; i < nPackets; i++ {
+				_, err := buffer.Write(make([]byte, packetSize))
+				assert.NoError(err)
+			}
+
+			// Next write is expected to be errored.
+			_, err := buffer.Write(make([]byte, packetSize))
+			assert.Error(err, ErrFull)
+
+			packet := make([]byte, size)
+			for i := 0; i < nPackets; i++ {
+				n, err := buffer.Read(packet)
+				assert.NoError(err)
+				assert.Equal(packetSize, n)
+				if err != nil {
+					t.FailNow()
+				}
+			}
+		})
+	}
 }
 
 func TestBufferMisc(t *testing.T) {
@@ -256,12 +389,6 @@ func TestBufferMisc(t *testing.T) {
 	_, err = buffer.Read(packet)
 	assert.Equal(io.ErrShortBuffer, err)
 
-	// Try again with the right size
-	packet = make([]byte, 4)
-	n, err = buffer.Read(packet)
-	assert.NoError(err)
-	assert.Equal(4, n)
-
 	// Close
 	err = buffer.Close()
 	assert.NoError(err)
@@ -269,6 +396,127 @@ func TestBufferMisc(t *testing.T) {
 	// Make sure you can Close twice
 	err = buffer.Close()
 	assert.NoError(err)
+}
+
+func TestBufferAlloc(t *testing.T) {
+	packet := make([]byte, 1024)
+
+	test := func(f func(count int) func(), count int, max float64) func(t *testing.T) {
+		return func(t *testing.T) {
+			allocs := testing.AllocsPerRun(3, f(count))
+			if allocs > max {
+				t.Errorf("count=%v, max=%v, got %v",
+					count, max, allocs,
+				)
+			}
+		}
+	}
+
+	w := func(count int) func() {
+		return func() {
+			buffer := NewBuffer()
+			for i := 0; i < count; i++ {
+				_, err := buffer.Write(packet)
+				if err != nil {
+					t.Errorf("Write: %v", err)
+					break
+				}
+			}
+		}
+	}
+
+	t.Run("100 writes", test(w, 100, 13))
+	t.Run("200 writes", test(w, 200, 17))
+	t.Run("400 writes", test(w, 400, 19))
+	t.Run("1000 writes", test(w, 1000, 23))
+
+	wr := func(count int) func() {
+		return func() {
+			buffer := NewBuffer()
+			for i := 0; i < count; i++ {
+				_, err := buffer.Write(packet)
+				if err != nil {
+					t.Fatalf("Write: %v", err)
+				}
+				_, err = buffer.Read(packet)
+				if err != nil {
+					t.Fatalf("Read: %v", err)
+				}
+			}
+		}
+	}
+
+	t.Run("100 writes and reads", test(wr, 100, 7))
+	t.Run("1000 writes and reads", test(wr, 1000, 7))
+	t.Run("10000 writes and reads", test(wr, 10000, 7))
+}
+
+func benchmarkBufferWR(b *testing.B, size int64, write bool, grow int) { // nolint:unparam
+	buffer := NewBuffer()
+	packet := make([]byte, size)
+
+	// Grow the buffer first
+	pad := make([]byte, 1022)
+	for buffer.Size() < grow {
+		_, err := buffer.Write(pad)
+		if err != nil {
+			b.Fatalf("Write: %v", err)
+		}
+	}
+	for buffer.Size() > 0 {
+		_, err := buffer.Read(pad)
+		if err != nil {
+			b.Fatalf("Write: %v", err)
+		}
+	}
+
+	if write {
+		_, err := buffer.Write(packet)
+		if err != nil {
+			b.Fatalf("Write: %v", err)
+		}
+	}
+
+	b.SetBytes(size)
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		_, err := buffer.Write(packet)
+		if err != nil {
+			b.Fatalf("Write: %v", err)
+		}
+		_, err = buffer.Read(packet)
+		if err != nil {
+			b.Fatalf("Read: %v", err)
+		}
+	}
+}
+
+// In this benchmark, the buffer is often empty, which is hopefully
+// typical of real usage.
+func BenchmarkBufferWR14(b *testing.B) {
+	benchmarkBufferWR(b, 14, false, 128000)
+}
+
+func BenchmarkBufferWR140(b *testing.B) {
+	benchmarkBufferWR(b, 140, false, 128000)
+}
+
+func BenchmarkBufferWR1400(b *testing.B) {
+	benchmarkBufferWR(b, 1400, false, 128000)
+}
+
+// Here, the buffer never becomes empty, which forces wraparound
+func BenchmarkBufferWWR14(b *testing.B) {
+	benchmarkBufferWR(b, 14, true, 128000)
+}
+
+func BenchmarkBufferWWR140(b *testing.B) {
+	benchmarkBufferWR(b, 140, true, 128000)
+}
+
+func BenchmarkBufferWWR1400(b *testing.B) {
+	benchmarkBufferWR(b, 1400, true, 128000)
 }
 
 func benchmarkBuffer(b *testing.B, size int64) {
@@ -297,7 +545,14 @@ func benchmarkBuffer(b *testing.B, size int64) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		_, err := buffer.Write(packet)
+		var err error
+		for {
+			_, err = buffer.Write(packet)
+			if err != ErrFull {
+				break
+			}
+			time.Sleep(time.Microsecond)
+		}
 		if err != nil {
 			b.Fatal(err)
 		}

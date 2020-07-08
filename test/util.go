@@ -16,9 +16,9 @@ import (
 func TimeOut(t time.Duration) *time.Timer {
 	return time.AfterFunc(t, func() {
 		if err := pprof.Lookup("goroutine").WriteTo(os.Stdout, 1); err != nil {
-			fmt.Printf("failed to print goroutines: %v \n", err)
+			fmt.Printf("failed to print goroutines: %v \n", err) // nolint
 		}
-		panic("timeout")
+		panic("timeout") // nolint
 	})
 }
 
@@ -29,16 +29,16 @@ func CheckRoutines(t *testing.T) func() {
 		ticker := time.NewTicker(200 * time.Millisecond)
 		defer ticker.Stop()
 		for range ticker.C {
+			runtime.GC()
 			routines := getRoutines()
 			if len(routines) == 0 {
 				return
 			}
 			if try >= 50 {
-				t.Fatalf("%s: \n%s", failMessage, strings.Join(routines, "\n\n"))
+				t.Fatalf("%s: \n%s", failMessage, strings.Join(routines, "\n\n")) // nolint
 			}
 			try++
 		}
-
 	}
 
 	tryLoop("Unexpected routines on test startup")
@@ -57,6 +57,7 @@ func filterRoutines(routines []string) []string {
 	result := []string{}
 	for _, stack := range routines {
 		if stack == "" || // Empty
+			filterRoutineWASM(stack) || // WASM specific exception
 			strings.Contains(stack, "testing.Main(") || // Tests
 			strings.Contains(stack, "testing.(*T).Run(") || // Test run
 			strings.Contains(stack, "test.getRoutines(") { // This routine
