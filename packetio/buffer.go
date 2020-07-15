@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/mudutv/transport/deadline"
+	"context"
 )
 
 var errPacketTooBig = errors.New("packet too big")
@@ -259,6 +260,88 @@ func (b *Buffer) Read(packet []byte) (n int, err error) {
 	}
 }
 
+//miaobinwei
+func (b *Buffer) ReadContext(packet []byte, ctx context.Context) (n int, err error) {
+	// Return immediately if the deadline is already exceeded.
+	select {
+	case <-b.readDeadline.Done():
+		return 0, &netError{errTimeout, true, true}
+	default:
+	}
+
+	for {
+		b.mutex.Lock()
+
+		if b.head != b.tail {
+			// decode the packet size
+			n1 := b.data[b.head]
+			b.head++
+			if b.head >= len(b.data) {
+				b.head = 0
+			}
+			n2 := b.data[b.head]
+			b.head++
+			if b.head >= len(b.data) {
+				b.head = 0
+			}
+			count := int((uint16(n1) << 8) | uint16(n2))
+
+			// determine the number of bytes we'll actually copy
+			copied := count
+			if copied > len(packet) {
+				copied = len(packet)
+			}
+
+			// copy the data
+			if b.head+copied < len(b.data) {
+				copy(packet, b.data[b.head:b.head+copied])
+			} else {
+				k := copy(packet, b.data[b.head:])
+				copy(packet[k:], b.data[:copied-k])
+			}
+
+			// advance head, discarding any data that wasn't copied
+			b.head += count
+			if b.head >= len(b.data) {
+				b.head -= len(b.data)
+			}
+
+			if b.head == b.tail {
+				// the buffer is empty, reset to beginning
+				// in order to improve cache locality.
+				b.head = 0
+				b.tail = 0
+			}
+
+			b.count--
+
+			b.mutex.Unlock()
+
+			if copied < count {
+				return copied, io.ErrShortBuffer
+			}
+			return copied, nil
+		}
+
+		if b.closed {
+			b.mutex.Unlock()
+			return 0, io.EOF
+		}
+
+		notify := b.notify
+		b.subs = true
+		b.mutex.Unlock()
+
+		select {
+		case <-b.readDeadline.Done():
+			return 0, &netError{errTimeout, true, true}
+		case <-ctx.Done():
+			return 0, io.EOF
+		case <-notify:
+		}
+	}
+}
+
 // Close the buffer, unblocking any pending reads.
 // Data in the buffer can still be read, Read will return io.EOF only when empty.
 func (b *Buffer) Close() (err error) {
@@ -334,53 +417,3 @@ func (b *Buffer) SetReadDeadline(t time.Time) error {
 	return nil
 }
 
-//miaobinwei
-//func (b *Buffer) ReadContext(packet []byte,ctx context.Context) (n int, err error) {
-//	for {
-//		b.mutex.Lock()
-//
-//		// See if there are any packets in the queue.
-//		if len(b.packets) > 0 {
-//			first := b.packets[0]
-//
-//			// This is a packet-based reader/writer so we can't truncate.
-//			if len(first) > len(packet) {
-//				b.mutex.Unlock()
-//				return 0, io.ErrShortBuffer
-//			}
-//
-//			// Remove our packet and continue.
-//			b.packets = b.packets[1:]
-//			b.size -= len(first)
-//
-//			b.mutex.Unlock()
-//
-//			// Actually transfer the data.
-//			n := copy(packet, first)
-//			return n, nil
-//		}
-//
-//		// Make sure the reader isn't actually closed.
-//		// This is done after checking packets to fully read the buffer.
-//		if b.closed {
-//			b.mutex.Unlock()
-//			return 0, io.EOF
-//		}
-//
-//		// Get the current notify channel.
-//		// This will be closed when there is new data available, waking us up.
-//		notify := b.notify
-//
-//		// Set the subs marker, telling the writer we're waiting.
-//		b.subs = true
-//		b.mutex.Unlock()
-//
-//		// Wake for the broadcast.
-//		select {
-//		case <-ctx.Done():
-//			return 0, io.EOF
-//		case <-notify:
-//		}
-//
-//	}
-//}
